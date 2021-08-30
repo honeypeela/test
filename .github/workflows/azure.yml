@@ -1,0 +1,102 @@
+trigger:
+- develop
+- feature/*
+- release/*
+
+pool:
+  vmImage: 'macOS-10.14'
+
+variables:
+  - name: PROJECT_NAME
+    value: test
+  - name: MAVEN_CACHE_FOLDER
+    value: $(Pipeline.Workspace)/.m2/repository
+  - name: MAVEN_OPTS
+    value: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
+  - group: anypoint-platform
+
+steps:
+- task: DownloadSecureFile@1
+  name: mavenSettings
+  displayName: Download Maven Settings
+  inputs:
+    secureFile: 'settings.xml'
+- task: Cache@2
+  displayName: Cache Dependencies
+  inputs:
+    key: 'maven | "$(Agent.OS)" | **/pom.xml'
+    restoreKeys: |
+      maven | "$(Agent.OS)"
+      maven
+    path: $(MAVEN_CACHE_FOLDER)
+- task: Maven@3
+  displayName: Build & Test Application
+  condition: or(startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/'),startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+  inputs:
+    mavenPomFile: 'pom.xml'
+    goals: 'clean package'
+    publishJUnitResults: true
+    testResultsFiles: '**/surefire-reports/TEST-*.xml'
+    testRunTitle: '$(Build.Repository.Name) MUnit Tests - $(Build.SourceBranch)'
+    javaHomeOption: 'JDKVersion'
+    jdkVersionOption: '1.8'
+    mavenVersionOption: 'Default'
+    options: '-s $(mavenSettings.secureFilePath) $(MAVEN_OPTS)'
+    mavenOptions: '-Xmx3072m'
+    mavenAuthenticateFeed: false
+    effectivePomSkip: false
+    sonarQubeRunAnalysis: false
+- task: Maven@3
+  displayName: Build, Test & Publish Artifact to Exchange
+  condition: startsWith(variables['Build.SourceBranch'], 'refs/heads/develop')
+  inputs:
+    mavenPomFile: 'pom.xml'
+    goals: 'clean deploy'
+    publishJUnitResults: true
+    testResultsFiles: '**/surefire-reports/TEST-*.xml'
+    testRunTitle: '$(Build.Repository.Name) MUnit Tests - $(Build.SourceBranch)'
+    javaHomeOption: 'JDKVersion'
+    jdkVersionOption: '1.8'
+    mavenVersionOption: 'Default'
+    options: '-s $(mavenSettings.secureFilePath) $(MAVEN_OPTS)'
+    mavenOptions: '-Xmx3072m'
+    mavenAuthenticateFeed: false
+    effectivePomSkip: false
+    sonarQubeRunAnalysis: false
+
+- task: Maven@3
+  displayName: Deploy to Dev Environment
+  condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  inputs:
+    mavenPomFile: 'pom.xml'
+    goals: 'clean mule:deploy'
+    publishJUnitResults: false
+    javaHomeOption: 'JDKVersion'
+    jdkVersionOption: '1.8'
+    mavenVersionOption: 'Default'
+    options: '-DskipTests -s $(mavenSettings.secureFilePath) $(MAVEN_OPTS) -Dmule.artifact=target/*.jar -Dapp.runtime=4.3.0 -Dusername=$(anypoint.platform.username) -Dpassword=$(anypoint.platform.password) -Druntime.fabric.application.name=$(PROJECT_NAME)-dev -Druntime.fabric.name=RTF-Non-Prod -Denvironment=Dev -Dprovider=MC -DappUrl=api-dev-int-uk-01.nationalgrid.com/$(PROJECT_NAME)-dev -DbusinessGroup=Transmission -DcpuReserved=100m -DcpuMax=1000m -DmemoryReserved=700Mi -DpropertiesKey=propertiespasswo -DpropertiesEnv=dev -Danypoint.platform.client_id=$(anypoint.platform.client_id) -Danypoint.platform.client_secret=$(anypoint.platform.client_secret)'
+    mavenOptions: '-Xmx3072m'
+    mavenAuthenticateFeed: false
+    effectivePomSkip: false
+    sonarQubeRunAnalysis: false
+
+- task: CopyFiles@2
+  displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
+  inputs:
+    SourceFolder: '$(system.defaultworkingdirectory)'
+    Contents: '**/*.jar'
+    TargetFolder: '$(build.artifactstagingdirectory)'
+  condition: and(succeededOrFailed(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release'))
+- task: CopyFiles@2
+  displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
+  inputs:
+    SourceFolder: '$(system.defaultworkingdirectory)'
+    Contents: '**'
+    TargetFolder: '$(build.artifactstagingdirectory)'
+  condition: and(succeededOrFailed(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release'))
+
+- task: PublishBuildArtifacts@1
+  displayName: 'Copy Artifact to Drop location'
+  inputs:
+    PathtoPublish: '$(build.artifactstagingdirectory)'
+  condition: and(succeededOrFailed(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release'))
